@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>School Portal V5 - Live & AI</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; max-width: 1000px; margin: 0 auto; padding: 20px; background: #f4f7f6; }
+        .dashboard, .room-view { display: none; }
+        .dashboard.active, .room-view.active { display: block; animation: fadeIn 0.4s; }
+        @keyframes fadeIn { from { opacity:0; } to { opacity:1; } }
+
+        .card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 15px; }
+        .class-card { border-top: 5px solid #007cba; cursor: pointer; transition: transform 0.2s; }
+        .class-card:hover { transform: translateY(-3px); }
+        
+        input, select, textarea { width: 100%; padding: 10px; margin: 5px 0; border: 1px solid #ddd; box-sizing: border-box; border-radius: 4px; }
+        button { padding: 10px 15px; border: none; cursor: pointer; background: #007cba; color: white; border-radius: 4px; }
+        button:hover { background: #005a87; }
+        button.red { background: #dc3545; }
+        button.green { background: #28a745; }
+        
+        .tab-btn { background: #ddd; color: #333; margin-right: 5px; padding: 10px 20px; font-weight: bold; }
+        .tab-btn.active { background: #007cba; color: white; }
+
+        /* LIVE & NOTES STYLES */
+        .live-box { border: 2px solid #dc3545; background: #fff5f5; padding: 20px; border-radius: 5px; }
+        #live-transcript-display { font-family: monospace; height: 150px; overflow-y: auto; background: white; padding: 10px; border: 1px solid #ccc; margin-top:10px; }
+        .notes-content { white-space: pre-wrap; background:#f9f9f9; padding:15px; line-height: 1.6; border-left: 4px solid #007cba; }
+        .recording-dot { height: 12px; width: 12px; background: red; border-radius: 50%; display: inline-block; animation: blink 1s infinite; margin-right: 5px; display:none; }
+        @keyframes blink { 0% { opacity: 1; } 50% { opacity: 0; } 100% { opacity: 1; } }
+    </style>
+</head>
+<body>
+
+<div id="login" class="dashboard active">
+    <div class="card" style="max-width:400px; margin:100px auto; text-align:center;">
+        <h2>🔐 Portal Login</h2>
+        <input id="email" placeholder="Email (teacher@test.com)">
+        <input id="password" type="password" placeholder="Password (teacher123)">
+        <button onclick="handleLogin()">Login</button>
+    </div>
+</div>
+
+<div id="teacher-lobby" class="dashboard">
+    <div style="display:flex; justify-content:space-between;"><h1>👨‍🏫 My Classrooms</h1> <button onclick="logout()">Logout</button></div>
+    <div class="card">
+        <h3>➕ Create New Class</h3>
+        <input id="new-class-name" placeholder="Class Name">
+        <button onclick="createClass()">Create</button>
+    </div>
+    <div id="teacher-class-list" class="grid"></div>
+</div>
+
+<div id="teacher-room" class="room-view">
+    <div style="display:flex; justify-content:space-between; margin-bottom:20px;">
+        <h2 id="tr-name">Class Name</h2>
+        <button onclick="show('teacher-lobby')">⬅ Back</button>
+    </div>
+    
+    <div class="card">🔑 Code: <strong id="tr-code">...</strong></div>
+    
+    <div id="pending-box" class="card" style="border-left: 5px solid orange;">
+        <h3>🔔 Student Requests</h3>
+        <div id="pending-list">Loading...</div>
+    </div>
+
+    <div style="margin-bottom:15px;">
+        <button class="tab-btn active" onclick="switchTab('lectures', 'teacher')">📚 Lectures</button>
+        <button class="tab-btn" onclick="switchTab('assignments', 'teacher')">📝 Assignments</button>
+        <button class="tab-btn" onclick="switchTab('live', 'teacher')" style="background:#ffdddd; color:#d63384;">🔴 GO LIVE</button>
+    </div>
+
+    <div id="teacher-tab-live" style="display:none;">
+        <div class="card live-box">
+            <h3>🔴 Live Class Transcription</h3>
+            <p>1. Click Start. 2. Teach. 3. Click End to save as AI Notes.</p>
+            <div>
+                <span id="rec-dot" class="recording-dot"></span>
+                <button id="btn-start" class="green" onclick="startLive()">▶ Start Class</button>
+                <button id="btn-stop" class="red" onclick="stopLive()" disabled>⏹ End & Save Notes</button>
+            </div>
+            <div id="teacher-transcript-preview" style="background:white; padding:10px; margin-top:10px; height:100px; overflow:auto; border:1px solid #ccc;"></div>
+        </div>
+    </div>
+
+    <div id="teacher-tab-lectures">
+        <div class="card">
+            <h3>Upload File</h3>
+            <input id="lec-title" placeholder="Title">
+            <input type="file" id="lec-audio">
+            <button onclick="uploadLecture()">Generate Notes</button>
+            <p id="upload-status" style="display:none; color:blue;">Generating...</p>
+        </div>
+        <div id="room-lectures-list"></div>
+    </div>
+
+    <div id="teacher-tab-assignments" style="display:none;">
+        <div class="card">
+            <h3>Create Assignment</h3>
+            <input id="assign-title" placeholder="Title">
+            <input id="assign-desc" placeholder="Desc">
+            <input id="assign-date" type="date">
+            <button onclick="createAssignment()">Post</button>
+        </div>
+        <div id="room-assignments-list"></div>
+    </div>
+</div>
+
+<div id="student-lobby" class="dashboard">
+    <div style="display:flex; justify-content:space-between;"><h1>👨‍🎓 Student Portal</h1> <button onclick="logout()">Logout</button></div>
+    <div class="card">
+        <h3>Join Class</h3>
+        <input id="join-code" placeholder="Code">
+        <button onclick="joinClass()">Join</button>
+    </div>
+    <div id="student-class-list" class="grid"></div>
+</div>
+
+<div id="student-room" class="room-view">
+    <div style="display:flex; justify-content:space-between;">
+        <h2 id="sr-name">Class Name</h2>
+        <button onclick="show('student-lobby')">⬅ Back</button>
+    </div>
+    <div style="margin-bottom:15px;">
+        <button class="tab-btn active" onclick="switchTab('lectures', 'student')">📚 AI Lectures</button>
+        <button class="tab-btn" onclick="switchTab('assignments', 'student')">📝 Assignments</button>
+        <button class="tab-btn" onclick="switchTab('live', 'student')" style="background:#ffdddd; color:#d63384;">🔴 LIVE VIEW</button>
+    </div>
+
+    <div id="student-tab-live" style="display:none;">
+        <div class="card live-box">
+            <h3>🔴 Live Class Feed</h3>
+            <div id="student-live-transcript" style="background:white; height:200px; overflow:auto; padding:10px;">Waiting for teacher...</div>
+        </div>
+    </div>
+
+    <div id="student-tab-lectures"><div id="student-lectures-content"></div></div>
+    <div id="student-tab-assignments" style="display:none;"><div id="student-assignments-content"></div></div>
+</div>
+
+<script>
+    // ⚠️ UPDATE URL HERE
+    const BASE_URL = "https://marilu-litten-nondisastrously.ngrok-free.dev/"; 
+
+    let currentUser = null;
+    let currentClassId = null;
+    let socket = null;
+    let recognition = null;
+    let fullTranscript = "";
+
+    // --- SOCKET SETUP ---
+    function setupSocket() {
+        if(socket) return;
+        socket = io(BASE_URL, { transports: ['websocket', 'polling'] });
+        socket.on('connect', () => console.log("Socket Connected"));
+        
+        socket.on('receive_transcription', (data) => {
+            const div = document.getElementById("student-live-transcript");
+            div.innerText += " " + data.text;
+            div.scrollTop = div.scrollHeight;
+        });
+    }
+
+    // --- API HELPER ---
+    async function api(endpoint, options={}) {
+        options.headers = { ...(options.headers || {}), "ngrok-skip-browser-warning": "true", "Content-Type": "application/json" };
+        const res = await fetch(`${BASE_URL}${endpoint}`, options);
+        return await res.json();
+    }
+
+    async function uploadApi(endpoint, formData) {
+        const res = await fetch(`${BASE_URL}${endpoint}`, {
+            method: "POST",
+            headers: { "ngrok-skip-browser-warning": "true" },
+            body: formData
+        });
+        return await res.json();
+    }
+
+    function show(id) {
+        document.querySelectorAll('.dashboard, .room-view').forEach(d => d.classList.remove('active'));
+        document.getElementById(id).classList.add('active');
+    }
+    function logout() { currentUser = null; show('login'); }
+
+    // --- LOGIN ---
+    async function handleLogin() {
+        const email = document.getElementById("email").value;
+        const password = document.getElementById("password").value;
+        const data = await api("/login", { method: "POST", body: JSON.stringify({ email, password }) });
+        if (data.status === "success") {
+            currentUser = data;
+            setupSocket();
+            if (data.role === "teacher") loadTeacherLobby();
+            else loadStudentLobby();
+        } else alert("Login Failed");
+    }
+
+    // --- LIVE CLASS LOGIC ---
+    function startLive() {
+        if (!('webkitSpeechRecognition' in window)) return alert("Use Chrome for Live Class");
+        
+        socket.emit('join_classroom', { classroom_id: currentClassId });
+        
+        recognition = new webkitSpeechRecognition();
+        recognition.continuous = true;
+        recognition.interimResults = false;
+        recognition.lang = "en-US";
+
+        recognition.onstart = function() {
+            document.getElementById("rec-dot").style.display = "inline-block";
+            document.getElementById("btn-start").disabled = true;
+            document.getElementById("btn-stop").disabled = false;
+            fullTranscript = "";
+            document.getElementById("teacher-transcript-preview").innerText = "Listening...";
+        };
+
+        recognition.onresult = function(event) {
+            for (let i = event.resultIndex; i < event.results.length; ++i) {
+                if (event.results[i].isFinal) {
+                    let text = event.results[i][0].transcript;
+                    fullTranscript += text + " ";
+                    document.getElementById("teacher-transcript-preview").innerText += text + " ";
+                    socket.emit('live_transcription', { classroom_id: currentClassId, text: text });
+                }
+            }
+        };
+        recognition.start();
+    }
+
+    async function stopLive() {
+        if(recognition) recognition.stop();
+        document.getElementById("rec-dot").style.display = "none";
+        document.getElementById("btn-start").disabled = false;
+        document.getElementById("btn-stop").disabled = true;
+
+        if(fullTranscript.length < 5) return alert("No audio recorded.");
+
+        const title = prompt("Class Ended. Name this lecture:", "Live Class Notes");
+        if(!title) return;
+
+        // Save Transcript as Lecture
+        const fd = new FormData();
+        fd.append("teacher_id", currentUser.user_id);
+        fd.append("classroom_id", currentClassId);
+        fd.append("title", title);
+        fd.append("text_content", fullTranscript); // Send Raw Text
+
+        alert("Generating AI Notes from Live Class... Please wait.");
+        await uploadApi("/generate-notes", fd);
+        alert("Saved!");
+        loadLectures(currentClassId, "room-lectures-list");
+    }
+
+    // --- TEACHER ---
+    async function loadTeacherLobby() {
+        show('teacher-lobby');
+        const data = await api(`/classroom/teacher/list?teacher_id=${currentUser.user_id}`);
+        document.getElementById("teacher-class-list").innerHTML = data.classrooms.map(c => `
+            <div class="card class-card" onclick="enterTeacherRoom(${c.id}, '${c.name}', '${c.join_code}')">
+                <h3>${c.name}</h3> <span class="badge">Code: ${c.join_code}</span>
+                ${c.pending_count > 0 ? `<span class="badge" style="background:orange;color:white">🔔 ${c.pending_count}</span>` : ''}
+            </div>
+        `).join("");
+    }
+
+    async function createClass() {
+        const name = document.getElementById("new-class-name").value;
+        await api("/classroom/create", { method: "POST", body: JSON.stringify({ name, teacher_id: currentUser.user_id }) });
+        loadTeacherLobby();
+    }
+
+    async function enterTeacherRoom(id, name, code) {
+        currentClassId = id;
+        document.getElementById("tr-name").innerText = name;
+        document.getElementById("tr-code").innerText = code;
+        show('teacher-room');
+        loadPending();
+        loadLectures(id, "room-lectures-list");
+        loadAssignments(id, "room-assignments-list", true);
+        switchTab('lectures', 'teacher');
+    }
+
+    async function loadPending() {
+        const data = await api(`/classroom/students/pending?classroom_id=${currentClassId}`);
+        const div = document.getElementById("pending-list");
+        if(!data.requests.length) return div.innerHTML = "No pending requests.";
+        div.innerHTML = data.requests.map(s => `
+            <div style="border-bottom:1px solid #eee; padding:5px;">
+                ${s.name} 
+                <button style="background:green; color:white; border:none; padding:5px;" onclick="decide(${s.enrollment_id}, 'approve')">✔ Accept</button>
+            </div>
+        `).join("");
+    }
+
+    async function decide(eid, act) {
+        await api("/classroom/enroll/update", { method: "POST", body: JSON.stringify({ enrollment_id: eid, action: act }) });
+        loadPending();
+    }
+
+    async function uploadLecture() {
+        const title = document.getElementById("lec-title").value;
+        const audio = document.getElementById("lec-audio").files[0];
+        const fd = new FormData();
+        fd.append("teacher_id", currentUser.user_id);
+        fd.append("classroom_id", currentClassId);
+        fd.append("title", title);
+        if(audio) fd.append("audio", audio);
+        document.getElementById("upload-status").style.display = "block";
+        await uploadApi("/generate-notes", fd);
+        document.getElementById("upload-status").style.display = "none";
+        loadLectures(currentClassId, "room-lectures-list");
+    }
+
+    async function createAssignment() {
+        const title = document.getElementById("assign-title").value;
+        const desc = document.getElementById("assign-desc").value;
+        const date = document.getElementById("assign-date").value;
+        await api("/assignment/create", { method: "POST", body: JSON.stringify({
+            title, description: desc, due_date: date, teacher_id: currentUser.user_id, classroom_id: currentClassId
+        })});
+        alert("Posted!");
+        loadAssignments(currentClassId, "room-assignments-list", true);
+    }
+
+    // --- STUDENT ---
+    async function loadStudentLobby() {
+        show('student-lobby');
+        const data = await api(`/classroom/student/list?student_id=${currentUser.user_id}`);
+        document.getElementById("student-class-list").innerHTML = data.classrooms.map(c => `
+            <div class="card class-card" onclick="${c.status === 'approved' ? `enterStudentRoom(${c.id}, '${c.name}')` : ''}">
+                <h3>${c.name}</h3> <span class="badge">${c.status}</span>
+            </div>
+        `).join("");
+    }
+
+    async function joinClass() {
+        const code = document.getElementById("join-code").value;
+        await api("/classroom/join", { method: "POST", body: JSON.stringify({ student_id: currentUser.user_id, join_code: code }) });
+        alert("Request Sent"); loadStudentLobby();
+    }
+
+    async function enterStudentRoom(id, name) {
+        currentClassId = id;
+        document.getElementById("sr-name").innerText = name;
+        show('student-room');
+        loadLectures(id, "student-lectures-content");
+        loadAssignments(id, "student-assignments-content", false);
+        switchTab('lectures', 'student');
+        if(socket) socket.emit('join_classroom', { classroom_id: id });
+    }
+
+    async function submitWork(aid) {
+        const content = prompt("Answer:");
+        if(!content) return;
+        await api("/assignment/submit", { method: "POST", body: JSON.stringify({
+            assignment_id: aid, student_id: currentUser.user_id, student_name: currentUser.name, content
+        })});
+        alert("Submitted!");
+    }
+
+    // --- RENDER HELPERS ---
+    async function loadLectures(cid, elId) {
+        const data = await api(`/classroom/lectures?classroom_id=${cid}`);
+        document.getElementById(elId).innerHTML = data.lectures.map(l => `
+            <div class="card">
+                <h3>📚 ${l.title}</h3>
+                <div class="notes-content">${l.notes}</div>
+                <details><summary>Quiz</summary><p>MCQs loaded...</p></details>
+            </div>`).join("");
+    }
+
+    async function loadAssignments(cid, elId, isTeacher) {
+        const data = await api(`/assignment/list?classroom_id=${cid}`);
+        document.getElementById(elId).innerHTML = data.assignments.map(a => `
+            <div class="card"><h4>📝 ${a.title}</h4><p>${a.description}</p>
+            ${!isTeacher ? `<button onclick="submitWork(${a.id})">Submit</button>` : ''}</div>`).join("");
+    }
+
+    function switchTab(tab, role) {
+        document.getElementById(`${role}-tab-lectures`).style.display = (tab === 'lectures') ? 'block' : 'none';
+        document.getElementById(`${role}-tab-assignments`).style.display = (tab === 'assignments') ? 'block' : 'none';
+        document.getElementById(`${role}-tab-live`).style.display = (tab === 'live') ? 'block' : 'none';
+    }
+</script>
+</body>
+</html>
